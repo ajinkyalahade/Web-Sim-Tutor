@@ -22,7 +22,14 @@ class PdfSource(BaseSource):
 
         self.path = str(path)
         self._pdfium = pdfium
-        self._doc = pdfium.PdfDocument(self.path)
+        # Pass a Python file object: pdfium's own file opening cannot handle
+        # non-ASCII paths on Windows. autoclose closes it with the document.
+        handle = open(self.path, "rb")
+        try:
+            self._doc = pdfium.PdfDocument(handle, autoclose=True)
+        except Exception:
+            handle.close()
+            raise
         self.page_count = len(self._doc)
         if self.page_count <= 0:
             raise ValueError("This PDF has no pages")

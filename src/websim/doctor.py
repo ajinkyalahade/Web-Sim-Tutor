@@ -20,6 +20,11 @@ def report() -> str:
     lines.append(_line("WebSim", __version__))
     lines.append(_line("OS", f"{platform.system()} {platform.release()} ({platform.machine()})"))
     lines.append(_line("Python", sys.version.split()[0]))
+    from .paths import PROJECT_ROOT
+
+    lines.append(_line("Folder", str(PROJECT_ROOT)))
+    if platform.system() == "Windows" and not str(PROJECT_ROOT).isascii():
+        lines.append("  WARNING: the folder path has non-English characters; move WebSim to e.g. C:\\WebSim")
     try:
         from PySide6 import __version__ as pyside_version
 
@@ -42,10 +47,14 @@ def report() -> str:
 
         cameras = list_cameras(include_virtual=True)
         if not cameras:
-            lines.append("  none found (macOS may need Camera permission for Terminal)")
+            if platform.system() == "Windows":
+                lines.append("  none found (Settings → Privacy & security → Camera → allow desktop apps)")
+            else:
+                lines.append("  none found (macOS may need Camera permission for Terminal)")
         for camera in cameras:
             note = "  [virtual — hidden by WebSim]" if "obs virtual" in camera.name.lower() else ""
-            lines.append(f"  {camera.index:>6}  {camera.name}{note}")
+            backend = f" (backend {camera.backend})" if camera.backend else ""
+            lines.append(f"  {camera.index:>6}  {camera.name}{backend}{note}")
     except Exception as exc:  # noqa: BLE001
         lines.append(f"  could not enumerate: {exc}")
 
@@ -57,7 +66,7 @@ def report() -> str:
 
         ok, message = probe_virtual_camera()
         lines.append(f"  {'OK' if ok else 'FAIL'}  {message}")
-        if not ok:
+        if not ok and platform.system() != "Windows":
             lines.append("  Fix: install OBS Studio 30+, open it, Start Virtual Camera, Stop, quit OBS.")
     except Exception as exc:  # noqa: BLE001
         lines.append(f"  FAIL  {exc}")
@@ -66,8 +75,11 @@ def report() -> str:
     lines.append("")
     lines.append("Audio devices")
     try:
-        from .audio import guess_virtual_output, list_audio_devices
+        from .audio import guess_virtual_output, list_audio_devices, preferred_hostapi
 
+        hostapi = preferred_hostapi()
+        if hostapi is not None:
+            lines.append(f"  (showing {hostapi[1]} devices only)")
         devices = list_audio_devices()
         if not devices:
             lines.append("  no audio devices found (sounddevice/PortAudio missing?)")
@@ -101,7 +113,12 @@ def report() -> str:
         else:
             lines.append(f"  FAIL  mediapipe {mp.__version__} has no solutions API — use 0.10.x")
     except Exception as exc:  # noqa: BLE001
+        from .segmenter import mediapipe_hint
+
         lines.append(f"  FAIL  {exc}")
+        hint = mediapipe_hint(exc)
+        if hint:
+            lines.append(f"  Fix: {hint}")
 
     # ---------------------------------------------------------------- settings
     lines.append("")

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+import platform
 import threading
 import time
 from collections import deque
@@ -46,7 +47,19 @@ class AudioDevice:
         return any(k in n for k in ("blackhole", "cable output", "cable input", "vb-audio", "virtual cable"))
 
 
-def list_audio_devices() -> list[AudioDevice]:
+# On Windows PortAudio exposes every device once per host API. WebSim shows a
+# single API. WASAPI (with auto_convert) has the lowest latency and accepts our
+# 48 kHz on any device; DirectSound and MME also resample, so they are fallbacks.
+# WDM-KS is never used: it needs exact formats and often fails to open.
+WINDOWS_HOSTAPI_PREFERENCE = ("Windows WASAPI", "Windows DirectSound", "MME")
+MME_NAME_LIMIT = 31  # MME truncates device names to 31 characters
+
+
+def _system() -> str:
+    return platform.system()
+
+
+def _all_devices() -> list[AudioDevice]:
     if sd is None:
         return []
     try:
@@ -74,14 +87,81 @@ def list_audio_devices() -> list[AudioDevice]:
         return []
 
 
+def preferred_hostapi() -> tuple[int, str] | None:
+    """(index, name) of the host API WebSim uses on Windows; None elsewhere."""
+    if sd is None or _system() != "Windows":
+        return None
+    try:
+        hostapis = list(sd.query_hostapis())
+    except Exception:  # noqa: BLE001
+        return None
+    for wanted in WINDOWS_HOSTAPI_PREFERENCE:
+        for index, api in enumerate(hostapis):
+            if str(api.get("name", "")) == wanted and api.get("devices"):
+                return index, wanted
+    return None
+
+
+def list_audio_devices() -> list[AudioDevice]:
+    devices = _all_devices()
+    preferred = preferred_hostapi()
+    if preferred is None:
+        return devices
+    chosen = [d for d in devices if d.hostapi == preferred[1]]
+    return chosen or devices
+
+
+def _default_index(kind: str) -> int:
+    if sd is None:
+        return -1
+    try:
+        preferred = preferred_hostapi()
+        if preferred is not None:
+            api = sd.query_hostapis(preferred[0])
+            index = api.get("default_input_device" if kind == "input" else "default_output_device", -1)
+        else:
+            index = sd.default.device[0 if kind == "input" else 1]
+        return -1 if index is None else int(index)
+    except Exception:  # noqa: BLE001
+        return -1
+
+
+def _real_default_index(kind: str) -> int:
+    """The system default device, unless it is a virtual cable.
+
+    VB-Cable's installer often makes itself the Windows default playback and
+    recording device. Using it as "the default microphone" would record our
+    own output (a feedback loop), and as "default headphones" would send the
+    monitor mix to students. Fall back to the first real device instead.
+    """
+    index = _default_index(kind)
+    devices = list_audio_devices()
+    by_index = {d.index: d for d in devices}
+    current = by_index.get(index)
+    if current is None and index >= 0 and sd is not None:
+        try:
+            current = AudioDevice(index, str(sd.query_devices(index)["name"]), 0, 0)
+        except Exception:  # noqa: BLE001
+            current = None
+    if current is not None and not current.is_virtual_output:
+        return index
+    for dev in devices:
+        has_channels = dev.inputs > 0 if kind == "input" else dev.outputs > 0
+        if has_channels and not dev.is_virtual_output:
+            if current is not None:
+                log.info("Default %s is the virtual cable (%s); using %s", kind, current.name, dev.name)
+            return dev.index
+    return index
+
+
 def _default_name(kind: str) -> str:
     if sd is None:
         return ""
+    index = _real_default_index(kind)
+    if index < 0:
+        return ""
     try:
-        index = sd.default.device[0 if kind == "input" else 1]
-        if index is None or int(index) < 0:
-            return ""
-        return str(sd.query_devices(int(index))["name"])
+        return str(sd.query_devices(index)["name"])
     except Exception:  # noqa: BLE001
         return ""
 
@@ -94,26 +174,72 @@ def default_output_name() -> str:
     return _default_name("output")
 
 
-def find_device(name: str, *, want_input: bool = False, want_output: bool = False) -> int | None:
+def _same_device_name(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= MME_NAME_LIMIT and long.startswith(short)
+
+
+def device_candidates(name: str, *, want_input: bool = False, want_output: bool = False) -> list[int]:
+    """Device indices for *name*, best first: the shown host API, then the
+    same device under the other usable host APIs (Windows fallbacks)."""
     if not name or sd is None:
-        return None
-    for dev in list_audio_devices():
-        if dev.name != name:
-            continue
+        return []
+
+    def usable(dev: AudioDevice) -> bool:
         if want_input and dev.inputs <= 0:
-            continue
+            return False
         if want_output and dev.outputs <= 0:
-            continue
-        return dev.index
+            return False
+        return "WDM-KS" not in dev.hostapi
+
+    shown = [d for d in list_audio_devices() if usable(d)]
+    out = [d.index for d in shown if d.name == name]
+    out += [d.index for d in shown if d.index not in out and _same_device_name(d.name, name)]
+    if _system() == "Windows":
+        rank = {api: i for i, api in enumerate(WINDOWS_HOSTAPI_PREFERENCE)}
+        others = sorted(
+            (d for d in _all_devices() if usable(d) and d.index not in out and _same_device_name(d.name, name)),
+            key=lambda d: rank.get(d.hostapi, len(rank)),
+        )
+        out += [d.index for d in others]
+    return out
+
+
+def find_device(name: str, *, want_input: bool = False, want_output: bool = False) -> int | None:
+    found = device_candidates(name, want_input=want_input, want_output=want_output)
+    return found[0] if found else None
+
+
+def extra_settings(index: int):
+    """WASAPI shared mode only accepts the system mixer's sample rate unless
+    auto_convert is set, which would refuse 48 kHz on a 44.1 kHz device."""
+    if sd is None:
+        return None
+    try:
+        api = sd.query_hostapis(sd.query_devices(index)["hostapi"])
+        if "WASAPI" in str(api.get("name", "")):
+            return sd.WasapiSettings(auto_convert=True)
+    except Exception:  # noqa: BLE001
+        pass
     return None
+
+
+def _virtual_rank(name: str) -> int:
+    n = name.lower()
+    if "blackhole" in n or n.startswith("cable input") or "virtual cable" in n:
+        return 0
+    if "cable" in n:
+        return 1
+    return 2  # other VB-Audio devices, e.g. VoiceMeeter
 
 
 def guess_virtual_output(devices: list[AudioDevice] | None = None) -> str:
     devices = devices if devices is not None else list_audio_devices()
-    for dev in devices:
-        if dev.outputs > 0 and dev.is_virtual_output:
-            return dev.name
-    return ""
+    found = [dev for dev in devices if dev.outputs > 0 and dev.is_virtual_output]
+    found.sort(key=lambda dev: _virtual_rank(dev.name))
+    return found[0].name if found else ""
 
 
 def guess_virtual_input(devices: list[AudioDevice] | None = None) -> str:
@@ -369,17 +495,21 @@ class AudioEngine:
     def _start_mic(self, name: str) -> None:
         if sd is None:
             return
-        try:
-            default_in = int(sd.default.device[0]) if sd.default.device[0] is not None else -1
-        except Exception:  # noqa: BLE001
-            default_in = -1
-        index = find_device(name, want_input=True) if name else default_in
-        if index is None and name:
+        default_in = _real_default_index("input")
+        candidates = device_candidates(name, want_input=True) if name else []
+        if name and not candidates:
             log.warning("Microphone %s not found; using system default", name)
-            index = default_in
-        if index is None or index < 0:
+        if default_in >= 0 and default_in not in candidates:
+            candidates.append(default_in)
+        if not candidates:
             log.warning("Microphone not found: %s", name or "system default")
             return
+        for index in candidates:
+            if self._open_mic(index, name):
+                return
+
+    def _open_mic(self, index: int, name: str) -> bool:
+        extra = extra_settings(index)
         try:
             info = sd.query_devices(index)
             max_in = int(info["max_input_channels"])
@@ -388,7 +518,9 @@ class AudioEngine:
             selected = False
             for candidate in ([1, 2] if max_in >= 2 else [1]):
                 try:
-                    sd.check_input_settings(device=index, channels=candidate, samplerate=self.rate, dtype="float32")
+                    sd.check_input_settings(
+                        device=index, channels=candidate, samplerate=self.rate, dtype="float32", extra_settings=extra
+                    )
                     channels, rate, selected = candidate, self.rate, True
                     break
                 except Exception:  # noqa: BLE001
@@ -413,34 +545,45 @@ class AudioEngine:
                 dtype="float32",
                 blocksize=0,
                 callback=callback,
+                extra_settings=extra,
             )
             stream.start()
             with self._lock:
                 self._mic_stream = stream
+            return True
         except Exception as exc:  # noqa: BLE001
-            log.warning("Could not open microphone %s: %s", name or index, exc)
+            log.warning("Could not open microphone %s (device %s): %s", name or "default", index, exc)
             self._mic_stream = None
+            return False
 
     # ---------------------------------------------------------------- outputs
     def _start_output(self, key: str, name: str, *, monitor: bool) -> None:
         if sd is None:
             return
-        index = find_device(name, want_output=True)
-        if index is None:
+        candidates = device_candidates(name, want_output=True)
+        if not candidates:
             log.warning("Output device not found: %s", name)
             return
-        try:
-            sd.check_output_settings(device=index, channels=CHANNELS, samplerate=self.rate, dtype="float32")
-            stream = sd.OutputStream(
-                device=index,
-                channels=CHANNELS,
-                samplerate=self.rate,
-                dtype="float32",
-                blocksize=BLOCK,
-                latency="low",
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Could not open output %s: %s", name, exc)
+        stream = None
+        for index in candidates:
+            extra = extra_settings(index)
+            try:
+                sd.check_output_settings(
+                    device=index, channels=CHANNELS, samplerate=self.rate, dtype="float32", extra_settings=extra
+                )
+                stream = sd.OutputStream(
+                    device=index,
+                    channels=CHANNELS,
+                    samplerate=self.rate,
+                    dtype="float32",
+                    blocksize=BLOCK,
+                    latency="low",
+                    extra_settings=extra,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Could not open output %s (device %s): %s", name, index, exc)
+        if stream is None:
             return
         video_reader = self.video.new_reader()
         mic_reader = self.mic.new_reader()

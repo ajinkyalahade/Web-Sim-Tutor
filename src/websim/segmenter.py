@@ -18,6 +18,29 @@ log = logging.getLogger(__name__)
 _SEG_W, _SEG_H = 640, 360
 
 
+def mediapipe_hint(exc: BaseException | None = None, system: str | None = None) -> str:
+    """Plain-language fix for the usual ways MediaPipe fails to load on Windows."""
+    import platform
+
+    from .paths import PROJECT_ROOT
+
+    system = system or platform.system()
+    if system != "Windows":
+        return ""
+    text = str(exc or "").lower()
+    if "dll load failed" in text or "_framework_bindings" in text:
+        return (
+            "Install the Microsoft Visual C++ Redistributable (x64) from "
+            "https://aka.ms/vs/17/release/vc_redist.x64.exe, then restart WebSim"
+        )
+    if not str(PROJECT_ROOT).isascii():
+        return (
+            f"MediaPipe cannot load its model from a folder path with non-English characters "
+            f"({PROJECT_ROOT}). Move the WebSim folder to e.g. C:\\WebSim and run start.bat again"
+        )
+    return ""
+
+
 class BackgroundSegmenter(threading.Thread):
     def __init__(self) -> None:
         super().__init__(name="websim-segmenter", daemon=True)
@@ -78,6 +101,9 @@ class BackgroundSegmenter(threading.Thread):
         except Exception as exc:  # noqa: BLE001
             self.available = False
             self.error = f"Background removal unavailable: {exc}"
+            hint = mediapipe_hint(exc)
+            if hint:
+                self.error += f". {hint}"
             log.warning(self.error)
             return
 

@@ -21,7 +21,7 @@ Last verified: **7 November 2026** on macOS (Apple Silicon).
 
 ## Verification performed
 
-- 44 headless tests pass (`uv run pytest`).
+- 67 headless tests pass (`uv run pytest`), including simulated Windows camera/audio/OBS cases.
 - `ruff` clean; `uv lock --check` clean.
 - Wheel and sdist build.
 - Live MacBook camera: 720p composition at ~27–30 fps.
@@ -30,6 +30,21 @@ Last verified: **7 November 2026** on macOS (Apple Silicon).
 - Video seek / loop / natural end / speed changes; audio pause and seek flush.
 - UI render and headless startup (no exceptions).
 - `--doctor` output checked on this machine.
+
+## Windows review (7 November 2026)
+
+Fixed after the first Windows report ("not working even after installing OBS"):
+
+- OBS errors: WebSim now tells apart "driver not registered" and "already in use"
+  (OBS or another WebSim running); both used to say "install OBS".
+- Webcam: DirectShow only (no duplicate entries), MJPG for 720p30, opens off the
+  UI thread, detects busy/black cameras; never falls back onto the OBS camera.
+- Audio: one host API (WASAPI with auto-convert), never uses the VB-Cable as the
+  default mic/headphones (feedback loop), truncated MME names still match.
+- MediaPipe load failures are shown with the fix (VC++ runtime / non-ASCII path).
+- PDFs from non-ASCII paths; `--doctor` no longer crashes on a cp1252 console.
+
+Not yet verified on real Windows hardware — run the gate below on the Windows PC.
 
 ## Still needs hardware setup (not code)
 

@@ -245,6 +245,34 @@ Logs live in `.websim/logs/websim.log` inside the project folder.
 camera was never started once. Install OBS 30+, open it, Start Virtual Camera,
 Stop, quit OBS, then click **Retry virtual camera** in WebSim.
 
+**Windows: “OBS Virtual Camera is already in use”.** Something else is feeding the
+camera: OBS is open with *Start Virtual Camera* on, a second WebSim window is
+running, or an old `python.exe` was left behind (end it in Task Manager). Close
+it and click **Retry virtual camera**.
+
+**Windows: “virtual camera driver is not registered”.** OBS is installed, but its
+camera driver was never registered (common with portable/zip OBS or a skipped
+admin prompt). Open OBS, click **Start Virtual Camera**, accept the admin prompt,
+click **Stop Virtual Camera**, quit OBS, then retry.
+
+**Windows: webcam shows “No picture” or “Could not open”.** Another app (Zoom,
+Teams, a browser tab) has the camera, or desktop apps are blocked in Settings →
+Privacy & security → Camera. Close the other app and click **Refresh cameras**.
+WebSim uses DirectShow with MJPG for full 720p30 and retries without MJPG if a
+camera stays black.
+
+**Windows: “Background removal unavailable”.** Two usual causes, and the message
+says which: install the [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe),
+or move the WebSim folder to a path with only English letters (e.g. `C:\WebSim`).
+Avoid OneDrive-synced folders too.
+
+**Windows: echo or students hear themselves.** VB-Cable's installer can make
+itself the Windows default microphone/speaker. WebSim never uses the cable as the
+“system default” mic or headphones, but if you picked it by hand, choose your real
+devices in WebSim. Each device is listed once (WebSim uses WASAPI on Windows).
+
+Still stuck? Run `start.bat --doctor` and share its output.
+
 **Preview works but Zoom/browser shows black or frozen.** Select **OBS Virtual
 Camera** in that app. Close OBS. On macOS check the camera permission for your
 terminal; on Windows check Settings → Privacy → Camera. Restart the app that is

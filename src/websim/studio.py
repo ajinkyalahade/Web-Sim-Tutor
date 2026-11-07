@@ -414,7 +414,8 @@ class Studio(QObject):
     def _open_webcam(self, device: CameraDevice) -> None:
         self._close_webcam()
         try:
-            webcam = WebcamSource(device.index, device.name, device.backend)
+            # Opens on the webcam's own thread; failures arrive via the callback.
+            webcam = WebcamSource(device.index, device.name, device.backend, on_error=self._webcam_failed)
         except Exception as exc:  # noqa: BLE001
             log.warning("Camera failed: %s", exc)
             self._emit_notice(f"Camera failed: {exc}")
@@ -422,12 +423,14 @@ class Studio(QObject):
             return
         with self._lock:
             self._webcam = webcam
-        if not webcam.available:
-            self._webcam_failed_at = time.monotonic()
-            self._emit_notice(webcam.error or "Camera unavailable")
-        else:
-            self._webcam_failed_at = 0.0
+        self._webcam_failed_at = 0.0
         self.segmenter.reset()
+
+    def _webcam_failed(self, message: str) -> None:
+        """Called from the webcam thread."""
+        self._webcam_failed_at = time.monotonic()
+        self._emit_notice(message)
+        self.changed.emit()
 
     def _close_webcam(self) -> None:
         with self._lock:
@@ -765,7 +768,7 @@ class Studio(QObject):
                 frame, raw = webcam.frame_pair()
                 if frame is None:
                     if webcam.error:
-                        return placeholder("Camera unavailable", "Allow Camera access in System Settings, then Refresh")
+                        return placeholder("Camera unavailable", _short_help())
                     return placeholder("Waiting for the camera...", webcam.device_name)
                 if bg_blur:
                     if raw is not None:
@@ -774,7 +777,7 @@ class Studio(QObject):
                     if mask is not None:
                         frame = background_blur(frame, mask, strength=blur_strength if blur_enabled else 60)
                     else:
-                        self._note_error("Background removal is starting — keeping the background for now")
+                        self._note_error(self._segmenter_wait_message("keeping the background for now"))
                 elif blur_enabled:
                     frame = apply_blur(frame, blur_type, blur_strength, blur_box if blur_area == "box" else None)
                 return frame
@@ -793,12 +796,17 @@ class Studio(QObject):
                         self.segmenter.submit(raw)
                     mask = self.segmenter.latest() if overlay_style in ("cutout", "ghost") else None
                     if overlay_style in ("cutout", "ghost") and mask is None:
-                        self._note_error("Background removal is starting — using corner view for now")
+                        self._note_error(self._segmenter_wait_message("using corner view for now"))
                     base = overlay_person(base, person, mask, overlay_style)
             return base
         except Exception as exc:  # noqa: BLE001
             self._note_error(f"Frame error: {exc}")
             return placeholder("Something went wrong", str(exc)[:120])
+
+    def _segmenter_wait_message(self, fallback: str) -> str:
+        if not self.segmenter.available:
+            return f"{self.segmenter.error} — {fallback}"
+        return f"Background removal is starting — {fallback}"
 
     def _note_error(self, message: str) -> None:
         now = time.monotonic()
@@ -807,3 +815,11 @@ class Studio(QObject):
             self._last_error_at = now
             log.warning(message)
             self.notice.emit(message)
+
+
+def _short_help() -> str:
+    import platform
+
+    if platform.system() == "Windows":
+        return "Close other apps using the camera, check Windows camera privacy, then Refresh"
+    return "Allow Camera access in System Settings, then Refresh"

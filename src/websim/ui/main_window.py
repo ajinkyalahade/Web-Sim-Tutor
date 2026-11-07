@@ -162,7 +162,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(test_action)
         file_menu.addSeparator()
         quit_action = QAction("Quit", self)
-        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        # StandardKey.Quit is empty on Windows, so add Ctrl+Q explicitly there.
+        quit_keys = QKeySequence.keyBindings(QKeySequence.StandardKey.Quit) or [QKeySequence("Ctrl+Q")]
+        quit_action.setShortcuts(quit_keys)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
@@ -305,14 +307,11 @@ class MainWindow(QMainWindow):
         if self.studio.sink.active or self.studio.preview_only:
             self.banner_wrap.hide()
             return
-        error = self.studio.sink.error
-        if error and "obs" not in error.lower():
-            message = error
-        else:
-            message = (
-                "Virtual camera unavailable — preview only. Install OBS Studio 30+, open it once, "
-                "start/stop its virtual camera, then click Retry."
-            )
+        # sink.error already holds the specific, platform-aware fix.
+        message = self.studio.sink.error or (
+            "Virtual camera unavailable — preview only. Install OBS Studio 30+, open it once, "
+            "start/stop its virtual camera, then click Retry."
+        )
         self.banner.setText(message)
         self.banner_wrap.show()
 

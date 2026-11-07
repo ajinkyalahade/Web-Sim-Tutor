@@ -28,11 +28,15 @@ class VirtualCameraSink:
             import pyvirtualcam
 
             fmt = pyvirtualcam.PixelFormat.RGB
+            # Ask for OBS explicitly. Otherwise, on Windows, pyvirtualcam also tries
+            # Unity Capture and appends its "not found" error, which hides the
+            # real OBS error.
             self._camera = pyvirtualcam.Camera(
                 width=self.width,
                 height=self.height,
                 fps=self.fps,
                 fmt=fmt,
+                backend="obs",
                 print_fps=False,
             )
             self.active = True
@@ -78,10 +82,27 @@ class VirtualCameraSink:
             self.status = "Stopped"
 
 
-def _friendly_error(exc: Exception) -> str:
+def _friendly_error(exc: Exception, system: str | None = None) -> str:
     text = str(exc)
-    system = platform.system()
+    system = system or platform.system()
     lowered = text.lower()
+    if system == "Windows":
+        # pyvirtualcam (native_windows_obs/virtual_output.h) raises exactly two errors:
+        if "could not be started" in lowered:
+            # The shared frame queue already exists: someone else is feeding the camera.
+            return (
+                "The OBS Virtual Camera is already in use. Close OBS (or click 'Stop Virtual Camera' "
+                "in OBS), close any other WebSim window, check Task Manager for a leftover "
+                "python.exe / websim.exe, then click Retry virtual camera."
+            )
+        if "device not found" in lowered or "did you install obs" in lowered:
+            # The DirectShow filter is not registered in HKEY_CLASSES_ROOT.
+            return (
+                "OBS is installed but its virtual camera driver is not registered. Open OBS, click "
+                "'Start Virtual Camera' (approve the admin prompt), then 'Stop Virtual Camera', quit "
+                "OBS and click Retry virtual camera. A portable/zip copy of OBS cannot register it: "
+                "use the normal OBS installer."
+            )
     if "obs" in lowered or "virtual camera" in lowered or "not found" in lowered:
         if system == "Darwin":
             return (
@@ -89,13 +110,8 @@ def _friendly_error(exc: Exception) -> str:
                 "'Start Virtual Camera' then 'Stop', and quit OBS. WebSim will then appear as "
                 "'OBS Virtual Camera'."
             )
-        if system == "Windows":
-            return (
-                "OBS Virtual Camera not found. Install OBS Studio 30+, run it once, click "
-                "'Start Virtual Camera' then 'Stop', and quit OBS. WebSim will then appear as "
-                "'OBS Virtual Camera'."
-            )
-    if "permission" in lowered:
+        return f"OBS Virtual Camera not available: {text}"
+    if "permission" in lowered and system == "Darwin":
         return "macOS blocked camera access. Allow it in System Settings → Privacy & Security → Camera."
     return f"Virtual camera error: {text}"
 

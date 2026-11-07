@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 title WebSim
+rem UTF-8 for Python I/O so messages and logs never fail on special characters
+set "PYTHONUTF8=1"
 
 where uv >nul 2>nul
 if errorlevel 1 (
