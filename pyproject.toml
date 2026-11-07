@@ -1,0 +1,41 @@
+[project]
+name = "websim"
+version = "0.1.0"
+description = "WebSim - virtual webcam studio for tutors"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pyside6>=6.7",
+    "av>=12",
+    "numpy",
+    "opencv-contrib-python",
+    "pyvirtualcam>=0.12",
+    "sounddevice>=0.4.6",
+    "mediapipe==0.10.21",
+    "pypdfium2>=4",
+    "pynput>=1.7",
+    "cv2-enumerate-cameras>=1.1",
+]
+
+[project.scripts]
+websim = "websim.app:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --basetemp=tests/_tmp"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/websim"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

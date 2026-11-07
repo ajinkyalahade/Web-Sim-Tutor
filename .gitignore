@@ -1,0 +1,27 @@
+# Environment / runtime
+.venv/
+.websim/
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Test artifacts
+tests/_tmp/
+tests/_artifacts/
+
+# Editors (keep personal settings out of the repo)
+.idea/
+.vscode/

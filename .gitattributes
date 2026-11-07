@@ -1,0 +1,14 @@
+# Keep scripts and source LF; Windows launcher must keep CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.command text eol=lf
+
+# Binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.wav binary
+*.mp4 binary
